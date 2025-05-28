@@ -1,0 +1,15 @@
+# infrastructure/k8s/api-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-support-api
+  labels:
+    app: social-support-api
+spec:
+  type: ClusterIP
+  selector:
+    app: social-support-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

@@ -1,0 +1,85 @@
+import os
+import json
+import uuid
+import logging
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from src.services.db import get_db_session, ChatHistory, Applicant
+from src.services.llm_host import LLMClient
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    user_id: str = Field(..., description="ID of the user")
+    messages: list[str] = Field(..., min_items=1)
+    context: dict = Field(default_factory=dict)
+
+
+class ChatResponse(BaseModel):
+    responses: list[str]
+    session_id: str
+
+
+@router.post("/", response_model=ChatResponse, summary="Chat with the LLM")
+async def chat(
+    chat_req: ChatRequest,
+    db: Session = Depends(get_db_session),
+):
+    # 1) Ensure applicant exists
+    applicant = db.query(Applicant).get(chat_req.user_id)
+    if not applicant:
+        logger.info(f"Creating applicant record for '{chat_req.user_id}'")
+        applicant = Applicant(applicant_id=chat_req.user_id, demographic={})
+        db.add(applicant)
+        db.commit()
+
+    # 2) Persist the user's message
+    session_id = str(uuid.uuid4())
+    try:
+        db.add(
+            ChatHistory(
+                session_id=session_id,
+                applicant_id=chat_req.user_id,
+                role="user",
+                message=chat_req.messages[-1],
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to write user message")
+        db.rollback()
+
+    # 3) Call the Hugging Face–backed LLMClient
+    llm_client = LLMClient()   # no args!
+    try:
+        responses, session_id = llm_client.chat(chat_req.user_id, chat_req.messages, chat_req.context)
+        
+    except HTTPException as e:
+        # bubble up 502/504
+        raise e
+
+    # 4) Persist the assistant's reply
+    try:
+        db.add(
+            ChatHistory(
+                session_id=session_id,
+                applicant_id=chat_req.user_id,
+                role="assistant",
+                message=responses[-1],
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to write assistant message")
+        db.rollback()
+
+    # 5) Return a single JSON payload
+    return JSONResponse(
+    status_code=status.HTTP_200_OK,
+    content={"responses": responses, "session_id": session_id},
+)

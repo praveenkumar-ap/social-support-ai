@@ -1,0 +1,26 @@
+# src/core/recommendation_engine.py
+
+from src.services.llm_host import LLMClient
+
+class RecommendationEngine:
+    def __init__(self):
+        # … existing init …
+        self.llm = LLMClient()
+
+    def generate(self, processed_data: dict) -> str:
+        # if you want an LLM fallback *after* rules:
+        base_rec = self._rule_based(processed_data)
+        # and now refine via LLM:
+        prompt = (
+            "Here’s the applicant data:\n"
+            f"Eligibility: {processed_data['eligibility']}\n"
+            f"OCR texts: {processed_data.get('ocr_texts', [])}\n\n"
+            "Please rewrite a friendly, clear recommendation:"
+            f"\n\n{base_rec}"
+        )
+        try:
+            rec, _ = self.llm.chat(user_id="rec_engine", messages=[prompt], context={})
+            return rec[0]
+        except Exception:
+            # if the HF call fails, just fall back
+            return base_rec

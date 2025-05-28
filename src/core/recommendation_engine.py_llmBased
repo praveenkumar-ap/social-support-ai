@@ -1,0 +1,131 @@
+import os
+import logging
+from typing import Any, Dict, List
+from llama_cpp import Llama
+
+# try to import llama_cpp; if missing, we'll just fall back
+try:
+    from llama_cpp import Llama
+except ImportError:
+    Llama = None
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+class RecommendationEngine:
+    """
+    Hybrid recommendation engine:
+      - If RECOMMEND_USE_LLM=true and llama_cpp is available, invoke a local LLM for free-form advice.
+      - Else (or on any error) use rich rule-based logic.
+    """
+
+    def __init__(self):
+        # thresholds for rule-based
+        self.doc_threshold = int(os.getenv("RECOMMEND_DOC_THRESHOLD", "2"))
+        self.low_income_threshold = float(os.getenv("RECOMMEND_LOW_INCOME_THRESHOLD", "500"))
+        self.large_family_threshold = int(os.getenv("RECOMMEND_LARGE_FAMILY_THRESHOLD", "5"))
+
+        # decide whether to use LLM
+        self.use_llm = os.getenv("RECOMMEND_USE_LLM", "false").lower() == "true"
+        self.llm = None
+        if self.use_llm:
+            model_path = os.getenv("LLAMA_CPP_MODEL_PATH", "")
+            if not model_path or Llama is None:
+                logger.error(
+                    "LLM path or llama_cpp missing; disabling LLM-based recs"
+                )
+                self.use_llm = False
+            else:
+                try:
+                    self.llm = Llama(model_path=model_path)
+                    logger.info(f"✅ Loaded llama_cpp model from {model_path}")
+                except Exception:
+                    logger.exception("❌ Failed to load llama_cpp model")
+                    self.use_llm = False
+
+    def generate(self, processed_data: Dict[str, Any]) -> str:
+        # 1) Try LLM if enabled
+        if self.use_llm:
+            try:
+                prompt = self._build_prompt(processed_data)
+                resp = self.llm.create_completion(
+                    prompt=prompt,
+                    max_tokens=256,
+                    temperature=0.7,
+                    stop=["\n\n"]
+                )
+                text = resp["choices"][0]["text"].strip()
+                if text:
+                    logger.info("🔮 LLM-based recommendation generated")
+                    return text
+            except Exception:
+                logger.exception("❌ LLM recommendation failed; falling back")
+
+        # 2) Otherwise (or on failure) rule-based
+        return self._rule_based(processed_data)
+
+    def _build_prompt(self, data: Dict[str, Any]) -> str:
+        """
+        Craft a simple prompt from processed_data for the LLM.
+        """
+        elig = data.get("eligibility", "unknown")
+        income = data.get("eligibility_inputs", {}).get("income", 0)
+        fam = data.get("eligibility_inputs", {}).get("family_size", 0)
+        docs = len(data.get("documents", []))
+        return (
+            f"You are a social support advisor. The applicant's status is '{elig}'. "
+            f"Income=${income:.2f}, family_size={fam}, docs_submitted={docs}. "
+            "Based on this, write a concise recommendation for next steps."
+        )
+
+    def _rule_based(self, data: Dict[str, Any]) -> str:
+        """
+        Pure rule-based recommendations:
+        """
+        elig = data.get("eligibility", "").lower()
+        income = float(data.get("eligibility_inputs", {}).get("income", 0))
+        fam = int(data.get("eligibility_inputs", {}).get("family_size", 0))
+        docs = len(data.get("documents", []))
+        ocr = data.get("ocr_texts", [])
+
+        # Declined → empathy + next steps
+        if elig != "approved":
+            return (
+                "We’re sorry, but you do not meet eligibility at this time. "
+                "Please review our requirements or contact support for help."
+            )
+
+        # Approved but very low income
+        if income < self.low_income_threshold:
+            return (
+                "Your income is low. We recommend you first apply for basic "
+                "financial aid programs (e.g., emergency grants)."
+            )
+
+        # Approved & large family
+        if fam >= self.large_family_threshold:
+            return (
+                "With a larger family, you may qualify for additional family "
+                "support programs along with standard services."
+            )
+
+        # Approved & plenty of docs
+        if docs >= self.doc_threshold:
+            return (
+                "Great, you’ve provided sufficient documents. We recommend "
+                "upskilling programs, career counseling, and job matching services."
+            )
+
+        # Approved & some OCR but needs more docs
+        if ocr and docs < self.doc_threshold:
+            return (
+                "We extracted some info, but to refine recommendations please "
+                "upload more documents (bank statements, ID, credit report)."
+            )
+
+        # Final fallback for approved
+        return (
+            "Congratulations on your approval! To get the most accurate guidance, "
+            "please submit additional supporting documents."
+        )

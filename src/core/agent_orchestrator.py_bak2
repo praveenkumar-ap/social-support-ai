@@ -1,0 +1,83 @@
+import logging
+from typing import List, Dict, Any
+
+from src.core.image_ocr import ImageOCR
+from src.core.eligibility_engine import EligibilityEngine
+from src.core.recommendation_engine import RecommendationEngine
+from src.core.document_processor import DocumentProcessor
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+class AgentOrchestrator:
+    """
+    Orchestrates:
+      1) OCR on images (skipping non-images)
+      2) Eligibility check
+      3) Recommendation
+      4) Final decision
+    """
+
+    def __init__(self):
+        self.ocr = ImageOCR()
+        self.eligibility_engine = EligibilityEngine()
+        self.recommendation_engine = RecommendationEngine()
+
+    def run(
+        self,
+        applicant_id: str,
+        documents: List[str],
+        income: float,
+        family_size: int
+    ) -> Dict[str, Any]:
+        processed_data: Dict[str, Any] = {}
+        processed_data["documents"] = documents
+
+        # 1) Document extraction
+        try:
+            doc_data = self.processor.extract(documents)
+            processed_data.update(doc_data)
+            logger.info(f"OCR/PDF/CSV extraction complete for {applicant_id}")
+        except Exception as e:
+            logger.exception("❌ Document processing failed")
+            raise RuntimeError("Document processing failed") from e
+        # 2) Eligibility
+        try:
+            eligibility = self.eligibility_engine.assess(
+                income=income,
+                family_size=family_size
+            )
+            processed_data["eligibility_inputs"] = {
+                "income": income,
+                "family_size": family_size
+            }
+            processed_data["eligibility"] = eligibility
+            logger.info(
+                "Eligibility for %r: income=%.2f, family_size=%d → %s",
+                applicant_id, income, family_size, eligibility
+            )
+        except Exception:
+            logger.exception("❌ Eligibility assessment failed; defaulting to 'declined'")
+            eligibility = "declined"
+            processed_data["eligibility"] = eligibility
+
+        # 3) Recommendation
+        try:
+            recommendation = self.recommendation_engine.generate(processed_data)
+            logger.info("Recommendation for %r: %r", applicant_id, recommendation)
+        except Exception:
+            logger.exception("❌ Recommendation generation failed; using fallback text")
+            recommendation = "We were unable to generate a recommendation at this time."
+
+        # 4) Final decision
+        final_decision = (
+            f"Based on our assessment, you are *{eligibility}*. "
+            f"Our recommendation: {recommendation}"
+        )
+
+        return {
+            "eligibility": eligibility,
+            "recommendation": recommendation,
+            "final_decision": final_decision,
+            "processed_data": processed_data,
+        }

@@ -1,0 +1,15 @@
+# infrastructure/k8s/postgres-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-support-db
+  labels:
+    app: social-support-db
+spec:
+  clusterIP: None           # Headless service for StatefulSet
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  selector:
+    app: social-support-db

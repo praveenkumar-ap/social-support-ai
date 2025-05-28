@@ -1,0 +1,13 @@
+*.pyc
+__pycache__/
+.env
+data/
+*.sqlite3
+*.log
+.venv/
+build/
+dist/
+*.egg-info
+.vscode/
+.idea/
+infrastructure/k8s/secret.yaml

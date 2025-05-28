@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-host
+  labels:
+    app: llm-host
+spec:
+  type: ClusterIP
+  selector:
+    app: llm-host
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434

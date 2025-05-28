@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-host
+  labels:
+    app: llm-host
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-host
+  template:
+    metadata:
+      labels:
+        app: llm-host
+    spec:
+      containers:
+        - name: llm
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          livenessProbe:
+            httpGet:
+              path: /v1/models
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 20

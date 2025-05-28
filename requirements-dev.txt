@@ -1,0 +1,9 @@
+pytest
+pytest-asyncio
+httpx
+flake8
+black
+isort
+mypy
+PyPDF2
+pytesseract

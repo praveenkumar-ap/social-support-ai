@@ -1,0 +1,93 @@
+import io, os, json, logging, base64
+from typing import List, Dict, Any
+from PIL import Image, UnidentifiedImageError
+import pandas as pd
+import PyPDF2
+import pytesseract
+
+logger = logging.getLogger(__name__)
+
+class DocumentProcessor:
+    """
+    Turn a list of base64‐data URIs into:
+      - image OCR texts
+      - PDF texts
+      - parsed CSV / Excel dataframes
+      - then extract structured facts (bank_balance, credit_score, id_number, etc.)
+    """
+    def __init__(self):
+        # If you have a custom tesseract path:
+        tcmd = os.getenv("TESSERACT_CMD")
+        if tcmd:
+            pytesseract.pytesseract.tesseract_cmd = tcmd
+
+    def extract(self, documents: List[str]) -> Dict[str, Any]:
+        processed: Dict[str, Any] = {
+            "ocr_texts": [],
+            "pdf_texts": [],
+            "tables": [],       # list of DataFrame → json
+            "structured": {},   # e.g. bank_balance, credit_score, id_number
+        }
+
+        for idx, uri in enumerate(documents):
+            try:
+                header, b64 = uri.split(",", 1)
+                data = base64.b64decode(b64)
+            except Exception:
+                logger.exception(f"Doc#{idx}: invalid data URI")
+                continue
+
+            # PDF?
+            if header.startswith("data:application/pdf"):
+                try:
+                    reader = PyPDF2.PdfReader(io.BytesIO(data))
+                    text = "\n".join(p.extract_text() or "" for p in reader.pages)
+                    processed["pdf_texts"].append(text)
+                except Exception:
+                    logger.exception(f"Doc#{idx}: PDF parsing failed")
+
+            # CSV / Excel?
+            elif header.startswith("data:text/csv") or header.lower().endswith("csv;base64"):
+                try:
+                    df = pd.read_csv(io.StringIO(data.decode("utf-8")))
+                    processed["tables"].append(df.to_dict(orient="records"))
+                except Exception:
+                    logger.exception(f"Doc#{idx}: CSV parsing failed")
+
+            elif any(header.startswith(f"data:application/{ext}") for ext in ("vnd.ms-excel","vnd.openxmlformats-officedocument.spreadsheetml.sheet")):
+                try:
+                    df = pd.read_excel(io.BytesIO(data))
+                    processed["tables"].append(df.to_dict(orient="records"))
+                except Exception:
+                    logger.exception(f"Doc#{idx}: Excel parsing failed")
+
+            # Image?
+            elif header.startswith("data:image/"):
+                try:
+                    img = Image.open(io.BytesIO(data))
+                    text = pytesseract.image_to_string(img)
+                    processed["ocr_texts"].append(text)
+                except UnidentifiedImageError:
+                    logger.warning(f"Doc#{idx}: not an image")
+                except Exception:
+                    logger.exception(f"Doc#{idx}: OCR failed")
+
+            else:
+                logger.warning(f"Doc#{idx}: unsupported format ({header.split(';')[0]})")
+
+        # now you can scan all the extracted texts & tables for structured facts
+        # e.g. look for "Balance: $1234.56", "Credit Score: 680", "ID No.: 1234…"
+        all_text = "\n".join(processed["ocr_texts"] + processed["pdf_texts"])
+        # crude regex examples:
+        import re
+        m = re.search(r"Balance[:\s]*\$?([\d,]+\.?\d*)", all_text)
+        if m:
+            processed["structured"]["bank_balance"] = float(m.group(1).replace(",",""))
+        m = re.search(r"Credit Score[:\s]*(\d{3})", all_text)
+        if m:
+            processed["structured"]["credit_score"] = int(m.group(1))
+        m = re.search(r"ID(?: No\.?| Number)?[:\s]*([A-Za-z0-9\-]+)", all_text)
+        if m:
+            processed["structured"]["id_number"] = m.group(1)
+
+        return processed

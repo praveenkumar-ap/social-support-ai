@@ -1,0 +1,52 @@
+# src/services/llm_host.py
+import os, logging
+from fastapi import HTTPException, status
+from huggingface_hub import InferenceClient
+
+logger = logging.getLogger(__name__)
+
+class LLMClient:
+    def __init__(self):
+        token = os.getenv("HF_API_TOKEN")
+        if not token:
+            raise RuntimeError("HF_API_TOKEN must be set to use Hugging Face Inference API")
+        self.client = InferenceClient(token=token)
+        self.model = os.getenv("HF_MODEL", "gpt2")   # default to gpt2
+        
+
+    def chat(self, user_id: str, messages: list[str], context: dict):
+        prompt = "\n".join(messages)
+        try:
+            resp = self.client.text_generation(
+                model=self.model,
+                prompt=prompt,
+                
+                #timeout=self.timeout
+            )
+        except StopIteration:
+            logger.error("No inference provider for model %r", self.model)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"No inference provider found for model '{self.model}'. "
+                    "Please set HF_MODEL to a supported text-generation model "
+                    "(e.g. 'gpt2' or 'EleutherAI/gpt-neo-125M')."
+                )
+            )
+        except Exception:
+            logger.exception("❌ Hugging Face Inference API error")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to get response from Hugging Face Inference API"
+            )
+
+        # unpack the generated text
+        if not resp or not isinstance(resp, list) or "generated_text" not in resp[0]:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unexpected Hugging Face response format"
+            )
+
+        text = resp[0]["generated_text"]
+        session_id = f"{user_id}-{os.urandom(4).hex()}"
+        return [text], session_id
