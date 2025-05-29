@@ -42,13 +42,21 @@ https://docs.google.com/document/d/1P2P26QVD78CSt_0S8Bu9ZovY46vxwGlvbezj5jCExCQ/
 
 3. **Build and start the application**
 
-   ```bash
-   make clean
-   ```
+ a)  ```bash
+      make clean
+      ```
 
-   ```bash
-   make all
-   ```
+ b)  ```bash
+      make all
+      ```
+
+ c)  ```bash
+      docker compose exec llm ollama pull gemma:2b
+      ```
+### Confirm the model
+d)  ```bash
+      docker compose exec llm printenv OLLAMA_MODEL
+    ```
 
    This runs `docker compose up --build`, launching:
 
